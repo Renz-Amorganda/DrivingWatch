@@ -19,6 +19,16 @@ const state = {
   frameCount: 0,
   currentFps: 0,
 
+  // Inference Cadence and Temporal Smoothing
+  lastInferenceTime: 0,
+  inferenceIntervalMs: 140, // Run AI model ~7 times per second (smooth, prevents flickering and saves battery)
+  isInferring: false,
+  smoothedScores: {
+    alert: 0,
+    drowsy: 0,
+    distracted: 0
+  },
+
   // Fatigue persistence buffer (Hysteresis)
   activeDrowsyStart: null,
   activeDistractedStart: null,
@@ -28,14 +38,25 @@ const state = {
   distractedIncidentCount: 0,
   alarmActive: false,
 
+  // Periodic Assessment and Strike Engine (User-requested 30s evaluation & 3-5 strike siren)
+  cycleDurationSec: 30,
+  cycleRemainingSec: 30,
+  cycleTimerInterval: null,
+  strikeLimit: 3,
+  currentStrikes: 0,
+  cycleDrowsyTicks: 0,
+  cycleDistractedTicks: 0,
+  cycleTotalTicks: 0,
+  emergencyAlarmActive: false,
+
   // Session clock
   sessionStartTime: null,
   sessionTimerInterval: null,
 };
 
-// Web Audio API Synth for Acoustic Warning
+// Web Audio API Synth for Acoustic Cues & Loud Emergency Siren
 let audioCtx = null;
-let alertOscillator = null;
+let emergencySirenInterval = null;
 
 function initAudioContext() {
   if (!audioCtx) {
@@ -61,7 +82,7 @@ function playWarningTone() {
     osc.frequency.setValueAtTime(660, audioCtx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.28);
 
-    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.28);
 
     osc.connect(gain);
@@ -71,6 +92,57 @@ function playWarningTone() {
     osc.stop(audioCtx.currentTime + 0.3);
   } catch (err) {
     console.error('Audio synthesis failed:', err);
+  }
+}
+
+// Loud Emergency Alarm (Rapid multi-tone klaxon for excessive fatigue strikes)
+function startLoudEmergencySiren() {
+  if (state.isAudioMuted || !audioCtx) return;
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+  if (emergencySirenInterval) return;
+
+  state.emergencyAlarmActive = true;
+  if (elements.emergencyAlarmBanner) {
+    elements.emergencyAlarmBanner.classList.remove('hidden');
+  }
+
+  const pulse = () => {
+    if (!state.emergencyAlarmActive || state.isAudioMuted) return;
+    try {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+
+      osc.type = 'sawtooth'; // Piercing vehicle alarm timbre
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+      osc.frequency.setValueAtTime(1200, audioCtx.currentTime + 0.12);
+
+      gain.gain.setValueAtTime(0.5, audioCtx.currentTime); // High volume alert
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.26);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  pulse();
+  emergencySirenInterval = setInterval(pulse, 340);
+}
+
+function stopLoudEmergencySiren() {
+  state.emergencyAlarmActive = false;
+  if (emergencySirenInterval) {
+    clearInterval(emergencySirenInterval);
+    emergencySirenInterval = null;
+  }
+  if (elements.emergencyAlarmBanner) {
+    elements.emergencyAlarmBanner.classList.add('hidden');
   }
 }
 
@@ -85,6 +157,19 @@ const elements = {
   toggleAudioBtn: document.getElementById('toggleAudioBtn'),
   audioBtnText: document.getElementById('audioBtnText'),
   openSettingsBtn: document.getElementById('openSettingsBtn'),
+
+  // Emergency Alarm & Acknowledgment
+  emergencyAlarmBanner: document.getElementById('emergencyAlarmBanner'),
+  silenceAlarmBtn: document.getElementById('silenceAlarmBtn'),
+
+  // Periodic Assessment and Strikes
+  cycleCountdownText: document.getElementById('cycleCountdownText'),
+  strikeNumber: document.getElementById('strikeNumber'),
+  strikeLimitText: document.getElementById('strikeLimitText'),
+  cycleProgressBar: document.getElementById('cycleProgressBar'),
+  strikePipsContainer: document.getElementById('strikePipsContainer'),
+  cycleIntervalSelect: document.getElementById('cycleIntervalSelect'),
+  strikeLimitSelect: document.getElementById('strikeLimitSelect'),
 
   // Viewport
   videoSkeleton: document.getElementById('videoSkeleton'),
@@ -200,6 +285,103 @@ function stopSessionClock() {
   elements.sessionClock.textContent = 'Session: 00:00:00';
 }
 
+// Periodic Assessment and Strike Cycle Management
+function startCycleTimer() {
+  state.cycleRemainingSec = state.cycleDurationSec;
+  state.cycleDrowsyTicks = 0;
+  state.cycleDistractedTicks = 0;
+  state.cycleTotalTicks = 0;
+  updateCycleDisplay();
+  updateStrikeUI();
+
+  if (state.cycleTimerInterval) clearInterval(state.cycleTimerInterval);
+
+  state.cycleTimerInterval = setInterval(() => {
+    if (!state.isRunning) return;
+
+    state.cycleRemainingSec--;
+    updateCycleDisplay();
+
+    if (state.cycleRemainingSec <= 0) {
+      evaluateCycle();
+      state.cycleRemainingSec = state.cycleDurationSec;
+      state.cycleDrowsyTicks = 0;
+      state.cycleDistractedTicks = 0;
+      state.cycleTotalTicks = 0;
+      updateCycleDisplay();
+    }
+  }, 1000);
+}
+
+function stopCycleTimer() {
+  if (state.cycleTimerInterval) {
+    clearInterval(state.cycleTimerInterval);
+    state.cycleTimerInterval = null;
+  }
+  state.cycleRemainingSec = state.cycleDurationSec;
+  updateCycleDisplay();
+}
+
+function updateCycleDisplay() {
+  if (elements.cycleCountdownText) {
+    elements.cycleCountdownText.textContent = `${state.cycleRemainingSec}s`;
+  }
+  if (elements.cycleProgressBar) {
+    const pct = Math.max(0, (state.cycleRemainingSec / state.cycleDurationSec) * 100);
+    elements.cycleProgressBar.style.width = `${pct.toFixed(0)}%`;
+  }
+}
+
+function evaluateCycle() {
+  if (state.cycleTotalTicks === 0) return;
+
+  const drowsyRatio = state.cycleDrowsyTicks / state.cycleTotalTicks;
+  const distractedRatio = state.cycleDistractedTicks / state.cycleTotalTicks;
+
+  // If operator showed fatigue or distraction for over 25% of the evaluation window:
+  if (drowsyRatio > 0.25 || distractedRatio > 0.25) {
+    state.currentStrikes++;
+    const reason = drowsyRatio > distractedRatio ? 'Drowsiness' : 'Distraction';
+    const confidenceVal = Math.max(drowsyRatio, distractedRatio);
+    logIncident(`Strike ${state.currentStrikes}: ${reason} Detected`, confidenceVal);
+    playWarningTone();
+
+    // Check if threshold reached
+    if (state.currentStrikes >= state.strikeLimit) {
+      startLoudEmergencySiren();
+      logIncident('CRITICAL: Max Strikes Reached', 1.0);
+    }
+  } else {
+    // If the operator stayed vigilant and alert, forgive / recover 1 strike
+    if (state.currentStrikes > 0) {
+      state.currentStrikes--;
+      logIncident('Clean Cycle: 1 Strike Recovered', 1.0);
+    }
+  }
+
+  updateStrikeUI();
+}
+
+function updateStrikeUI() {
+  if (elements.strikeNumber) {
+    elements.strikeNumber.textContent = state.currentStrikes;
+  }
+  if (elements.strikeLimitText) {
+    elements.strikeLimitText.textContent = state.strikeLimit;
+  }
+  if (elements.strikePipsContainer) {
+    elements.strikePipsContainer.innerHTML = '';
+    for (let i = 0; i < state.strikeLimit; i++) {
+      const pip = document.createElement('span');
+      pip.className = 'strike-pip';
+      if (i < state.currentStrikes) {
+        pip.classList.add('filled');
+      }
+      elements.strikePipsContainer.appendChild(pip);
+    }
+  }
+}
+
 // Start Video and Inference Pipeline
 async function startMonitoring() {
   initAudioContext();
@@ -241,6 +423,7 @@ async function startMonitoring() {
     elements.toggleCameraBtn.disabled = false;
     updateStatus('active', 'Monitoring Active');
     startSessionClock();
+    startCycleTimer();
 
     requestAnimationFrame(inferenceLoop);
   } catch (err) {
@@ -267,9 +450,18 @@ function stopMonitoring() {
 
   resetClassificationDisplays();
   stopSessionClock();
+  stopCycleTimer();
+  stopLoudEmergencySiren();
 }
 
 function resetClassificationDisplays() {
+  state.smoothedScores = { alert: 0, drowsy: 0, distracted: 0 };
+  state.isInferring = false;
+  state.currentStrikes = 0;
+  updateStrikeUI();
+  state.cycleRemainingSec = state.cycleDurationSec;
+  updateCycleDisplay();
+
   elements.reticleBox.className = 'reticle-box';
   elements.reticleStatusText.textContent = 'Camera Inactive';
   elements.stateCard.className = 'state-card';
@@ -286,11 +478,11 @@ function resetClassificationDisplays() {
   elements.fatigueTimeElapsed.textContent = '0.0s / 1.5s';
 }
 
-// Primary Inference Loop
+// Primary Inference Loop (60 FPS camera preview with calibrated AI inference cadence)
 async function inferenceLoop(timestamp) {
   if (!state.isRunning) return;
 
-  const t0 = performance.now();
+  // Always render camera feed at display refresh rate (60 FPS) for buttery smooth preview
   state.webcam.update();
 
   // Compute FPS
@@ -302,21 +494,28 @@ async function inferenceLoop(timestamp) {
     state.lastFrameTime = timestamp;
   }
 
-  // Obtain Class Predictions
-  let predictions = [];
+  // Throttle AI neural network evaluation to human-calibrated cadence (~7 times/sec)
+  // Prevents rapid strobing, jitter, and phone overheating
+  if (timestamp - state.lastInferenceTime >= state.inferenceIntervalMs && !state.isInferring) {
+    state.isInferring = true;
+    state.lastInferenceTime = timestamp;
 
-  if (state.model && !isUsingEmulatedModel) {
-    predictions = await state.model.predict(state.webcam.canvas);
-  } else {
-    // Standard vision heuristic (facial brightness and movement analysis from video canvas)
-    predictions = runVisionHeuristic(state.webcam.canvas);
+    const t0 = performance.now();
+    let predictions = [];
+
+    if (state.model && !isUsingEmulatedModel) {
+      predictions = await state.model.predict(state.webcam.canvas);
+    } else {
+      predictions = runVisionHeuristic(state.webcam.canvas);
+    }
+
+    const t1 = performance.now();
+    elements.latencyCounter.textContent = `Latency: ${Math.round(t1 - t0)} ms`;
+
+    // Process predictions through Exponential Moving Average filter
+    processPredictions(predictions);
+    state.isInferring = false;
   }
-
-  const t1 = performance.now();
-  elements.latencyCounter.textContent = `Latency: ${Math.round(t1 - t0)} ms`;
-
-  // Process predictions and update UI
-  processPredictions(predictions);
 
   requestAnimationFrame(inferenceLoop);
 }
@@ -374,31 +573,50 @@ function runVisionHeuristic(canvas) {
   ];
 }
 
-// Telemetry & Hysteresis Processing
+// Telemetry & Hysteresis Processing with Exponential Moving Average (EMA)
 function processPredictions(predictions) {
-  let highest = { className: 'Unknown', probability: 0 };
-  let alertVal = 0;
-  let drowsyVal = 0;
-  let distractedVal = 0;
+  let rawAlert = 0;
+  let rawDrowsy = 0;
+  let rawDistracted = 0;
 
   predictions.forEach(p => {
     const name = p.className.toLowerCase();
     const prob = p.probability;
 
     if (name.includes('alert') || name.includes('focused') || name.includes('upright')) {
-      alertVal = prob;
+      rawAlert = prob;
     } else if (name.includes('drowsy') || name.includes('nodding') || name.includes('sleep') || name.includes('closed')) {
-      drowsyVal = prob;
+      rawDrowsy = prob;
     } else if (name.includes('distracted') || name.includes('away') || name.includes('turned')) {
-      distractedVal = prob;
-    }
-
-    if (prob > highest.probability) {
-      highest = p;
+      rawDistracted = prob;
     }
   });
 
-  // Update Percentage Bars
+  // Exponential Moving Average smoothing (alpha = 0.35)
+  // Stabilizes rapid frame variance into smooth, fluid analog transitions
+  const alpha = 0.35;
+  state.smoothedScores.alert = state.smoothedScores.alert * (1 - alpha) + rawAlert * alpha;
+  state.smoothedScores.drowsy = state.smoothedScores.drowsy * (1 - alpha) + rawDrowsy * alpha;
+  state.smoothedScores.distracted = state.smoothedScores.distracted * (1 - alpha) + rawDistracted * alpha;
+
+  const alertVal = state.smoothedScores.alert;
+  const drowsyVal = state.smoothedScores.drowsy;
+  const distractedVal = state.smoothedScores.distracted;
+
+  // Determine dominant state from smoothed metrics
+  let dominantClass = 'Alert and Focused';
+  let dominantScore = alertVal;
+
+  if (drowsyVal > dominantScore) {
+    dominantClass = 'Drowsy / Nodding';
+    dominantScore = drowsyVal;
+  }
+  if (distractedVal > dominantScore) {
+    dominantClass = 'Distracted';
+    dominantScore = distractedVal;
+  }
+
+  // Update Percentage Bars smoothly
   elements.scoreAlert.textContent = `${(alertVal * 100).toFixed(1)}%`;
   elements.barAlert.style.width = `${(alertVal * 100).toFixed(0)}%`;
 
@@ -409,13 +627,21 @@ function processPredictions(predictions) {
   elements.barDistracted.style.width = `${(distractedVal * 100).toFixed(0)}%`;
 
   // Update State Card Readout
-  elements.currentClassification.textContent = highest.className;
-  elements.primaryConfidence.textContent = `${(highest.probability * 100).toFixed(0)}%`;
+  elements.currentClassification.textContent = dominantClass;
+  elements.primaryConfidence.textContent = `${(dominantScore * 100).toFixed(0)}%`;
+
+  // Accumulate periodic cycle metrics
+  state.cycleTotalTicks++;
+  if (drowsyVal > 0.55) {
+    state.cycleDrowsyTicks++;
+  } else if (distractedVal > 0.55) {
+    state.cycleDistractedTicks++;
+  }
 
   const now = performance.now();
 
   // Drowsiness Hysteresis Engine (Blink Buffer)
-  if (drowsyVal > 0.65) {
+  if (drowsyVal > 0.55) {
     if (!state.activeDrowsyStart) {
       state.activeDrowsyStart = now;
     }
@@ -426,7 +652,7 @@ function processPredictions(predictions) {
 
     if (elapsedDrowsy >= state.drowsyThresholdMs) {
       // Confirmed fatigue event
-      triggerFatigueAlert(highest.className, highest.probability);
+      triggerFatigueAlert(dominantClass, dominantScore);
     }
   } else {
     state.activeDrowsyStart = null;
@@ -438,12 +664,12 @@ function processPredictions(predictions) {
   elements.reticleBox.className = 'reticle-box';
   elements.stateCard.className = 'state-card';
 
-  if (drowsyVal > 0.65) {
+  if (drowsyVal > 0.55) {
     elements.reticleBox.classList.add('drowsy-state');
     elements.reticleStatusText.textContent = 'Drowsiness Detected';
     elements.stateCard.classList.add('critical-alert');
     updateStatus('critical', 'Fatigue Warning');
-  } else if (distractedVal > 0.65) {
+  } else if (distractedVal > 0.55) {
     elements.reticleBox.classList.add('distracted-state');
     elements.reticleStatusText.textContent = 'Operator Distracted';
     elements.stateCard.classList.add('warning-alert');
@@ -532,8 +758,29 @@ elements.toggleAudioBtn.addEventListener('click', () => {
   elements.audioBtnText.textContent = state.isAudioMuted ? 'Unmute Tone' : 'Mute Tone';
 });
 
-// Model Configuration Modal
+// Silence Alarm Acknowledgment
+if (elements.silenceAlarmBtn) {
+  elements.silenceAlarmBtn.addEventListener('click', () => {
+    stopLoudEmergencySiren();
+    state.currentStrikes = 0;
+    updateStrikeUI();
+    state.cycleRemainingSec = state.cycleDurationSec;
+    state.cycleDrowsyTicks = 0;
+    state.cycleDistractedTicks = 0;
+    state.cycleTotalTicks = 0;
+    updateCycleDisplay();
+    logIncident('Alarm Acknowledged & Reset', 1.0);
+  });
+}
+
+// System & Model Configuration Modal
 elements.openSettingsBtn.addEventListener('click', () => {
+  if (elements.cycleIntervalSelect) {
+    elements.cycleIntervalSelect.value = state.cycleDurationSec;
+  }
+  if (elements.strikeLimitSelect) {
+    elements.strikeLimitSelect.value = state.strikeLimit;
+  }
   elements.modelModal.classList.remove('hidden');
 });
 
@@ -542,26 +789,46 @@ elements.closeModelModalBtn.addEventListener('click', () => {
 });
 
 elements.saveModelUrlBtn.addEventListener('click', async () => {
-  const url = elements.modelUrlInput.value.trim();
-  if (!url) {
-    alert('Please enter a valid Teachable Machine URL.');
-    return;
+  // Save Evaluation Cycle Interval
+  if (elements.cycleIntervalSelect) {
+    state.cycleDurationSec = parseInt(elements.cycleIntervalSelect.value, 10);
+    state.cycleRemainingSec = state.cycleDurationSec;
+    updateCycleDisplay();
   }
-  elements.saveModelUrlBtn.disabled = true;
-  elements.saveModelUrlBtn.textContent = 'Loading...';
-  const success = await loadModel(url);
-  elements.saveModelUrlBtn.disabled = false;
-  elements.saveModelUrlBtn.textContent = 'Load Custom Model';
-  if (success) {
-    elements.modelModal.classList.add('hidden');
-    if (state.isRunning) {
-      stopMonitoring();
-      startMonitoring();
+
+  // Save Strike Limit
+  if (elements.strikeLimitSelect) {
+    state.strikeLimit = parseInt(elements.strikeLimitSelect.value, 10);
+    updateStrikeUI();
+  }
+
+  const url = elements.modelUrlInput.value.trim();
+  if (url) {
+    elements.saveModelUrlBtn.disabled = true;
+    elements.saveModelUrlBtn.textContent = 'Loading...';
+    const success = await loadModel(url);
+    elements.saveModelUrlBtn.disabled = false;
+    elements.saveModelUrlBtn.textContent = 'Save Configuration';
+    if (success) {
+      elements.modelModal.classList.add('hidden');
+      if (state.isRunning) {
+        stopMonitoring();
+        startMonitoring();
+      }
     }
+  } else {
+    elements.modelModal.classList.add('hidden');
   }
 });
 
 elements.usePresetModelBtn.addEventListener('click', () => {
+  state.cycleDurationSec = 30;
+  state.strikeLimit = 3;
+  if (elements.cycleIntervalSelect) elements.cycleIntervalSelect.value = "30";
+  if (elements.strikeLimitSelect) elements.strikeLimitSelect.value = "3";
+  state.cycleRemainingSec = state.cycleDurationSec;
+  updateCycleDisplay();
+  updateStrikeUI();
   loadModel(null);
   elements.modelModal.classList.add('hidden');
 });
@@ -618,9 +885,15 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Initial Setup: Auto-load local model files on startup
-if (document.readyState === 'loading') {
-  window.addEventListener('DOMContentLoaded', () => loadModel(null));
-} else {
+// Initial Setup: Auto-load local model files and initialize strike telemetry
+function initApp() {
+  updateStrikeUI();
+  updateCycleDisplay();
   loadModel(null);
+}
+
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
 }

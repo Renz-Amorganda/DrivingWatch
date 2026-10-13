@@ -469,6 +469,132 @@ body {
   color: var(--text-secondary);
 }
 
+/* Emergency Warning Banner */
+.emergency-alarm-banner {
+  background-color: rgba(231, 76, 60, 0.14);
+  border: 1px solid var(--status-critical);
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  animation: banner-pulse 1.4s ease-in-out infinite alternate;
+}
+
+@keyframes banner-pulse {
+  from { border-color: rgba(231, 76, 60, 0.5); }
+  to { border-color: rgba(231, 76, 60, 1); }
+}
+
+.alarm-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #fff;
+  background-color: var(--status-critical);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.alarm-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.alarm-text strong {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.alarm-text span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.emergency-btn {
+  background-color: var(--status-critical);
+  color: #fff;
+  font-weight: 600;
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.emergency-btn:active {
+  background-color: #c0392b;
+}
+
+/* Periodic Evaluation & Strike Card */
+.assessment-card {
+  background-color: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+
+.assessment-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 8px;
+}
+
+.cycle-title {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.cycle-title strong {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.strike-status {
+  text-align: right;
+}
+
+.strike-number {
+  font-size: 20px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.strike-fraction {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.cycle-bar {
+  background-color: #3b82f6;
+  transition: width 100ms linear;
+}
+
+.strike-pips {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.strike-pip {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background-color: var(--bg-surface-subtle);
+  transition: background-color var(--transition-fast);
+}
+
+.strike-pip.filled {
+  background-color: var(--status-critical);
+}
+
 /* Metrics and Probability Meters */
 .metrics-block {
   margin-bottom: 18px;
@@ -515,7 +641,7 @@ body {
 .meter-bar {
   height: 100%;
   border-radius: 999px;
-  transition: width 80ms ease-out;
+  transition: width 140ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .alert-bar { background-color: var(--status-normal); }

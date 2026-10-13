@@ -29,9 +29,19 @@
           <span class="status-dot" id="globalStatusDot"></span>
           <span class="status-label" id="globalStatusLabel">System Ready</span>
         </div>
-        <button type="button" class="action-btn text-btn" id="openSettingsBtn">Model Source</button>
+        <button type="button" class="action-btn text-btn" id="openSettingsBtn">Settings</button>
       </div>
     </header>
+
+    <!-- Emergency Warning Banner for Max Strikes -->
+    <div class="emergency-alarm-banner hidden" id="emergencyAlarmBanner">
+      <div class="alarm-badge">CRITICAL WARNING</div>
+      <div class="alarm-text">
+        <strong id="alarmHeadline">Fatigue Threshold Reached</strong>
+        <span>Repeated drowsiness or distraction detected. Pull over safely.</span>
+      </div>
+      <button type="button" class="action-btn emergency-btn" id="silenceAlarmBtn">Acknowledge and Reset</button>
+    </div>
 
     <!-- Main Operational Workspace -->
     <main class="workspace">
@@ -99,6 +109,28 @@
             <div class="state-heading" id="currentClassification">Inactive</div>
           </div>
           <div class="state-score" id="primaryConfidence">0%</div>
+        </div>
+
+        <!-- Periodic Evaluation Window and Strike Penalty Engine -->
+        <div class="assessment-card" id="assessmentCard">
+          <div class="assessment-meta">
+            <div>
+              <span class="block-label">Periodic Assessment</span>
+              <div class="cycle-title">Next Cycle in: <strong id="cycleCountdownText">30s</strong></div>
+            </div>
+            <div class="strike-status">
+              <span class="strike-number" id="strikeNumber">0</span>
+              <span class="strike-fraction">/ <span id="strikeLimitText">3</span> Strikes</span>
+            </div>
+          </div>
+          <div class="meter-track large-track">
+            <div class="meter-bar cycle-bar" id="cycleProgressBar" style="width: 100%;"></div>
+          </div>
+          <div class="strike-pips" id="strikePipsContainer">
+            <span class="strike-pip"></span>
+            <span class="strike-pip"></span>
+            <span class="strike-pip"></span>
+          </div>
         </div>
 
         <!-- Continuous Class Confidence Meters -->
@@ -185,11 +217,11 @@
       </section>
     </main>
 
-    <!-- Model Configuration Modal Sheet -->
+    <!-- System Configuration Modal Sheet -->
     <div class="modal-backdrop hidden" id="modelModal">
       <div class="modal-sheet">
         <div class="modal-header">
-          <h3 class="modal-title">Model Source Configuration</h3>
+          <h3 class="modal-title">System & Model Settings</h3>
           <button type="button" class="close-btn" id="closeModelModalBtn" aria-label="Close">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/>
@@ -198,17 +230,33 @@
           </button>
         </div>
         <div class="modal-body">
-          <p class="modal-description">
-            Provide the hosted Google Teachable Machine URL or use the calibrated built-in model weights.
-          </p>
           <div class="form-group">
-            <label for="modelUrlInput" class="form-label">Teachable Machine Model URL</label>
+            <label for="cycleIntervalSelect" class="form-label">Periodic Evaluation Window</label>
+            <select id="cycleIntervalSelect" class="text-input">
+              <option value="10">10 Seconds (Fast Presentation Mode)</option>
+              <option value="30" selected>30 Seconds (Standard Road Safety)</option>
+              <option value="60">60 Seconds (Highway Driving)</option>
+            </select>
+            <span class="field-hint">How often the system evaluates driver alertness.</span>
+          </div>
+
+          <div class="form-group">
+            <label for="strikeLimitSelect" class="form-label">Infraction Strike Limit</label>
+            <select id="strikeLimitSelect" class="text-input">
+              <option value="3" selected>3 Strikes (Strict Alert)</option>
+              <option value="5">5 Strikes (Tolerant Alert)</option>
+            </select>
+            <span class="field-hint">Consecutive drowsy/distracted events before the loud siren triggers.</span>
+          </div>
+
+          <div class="form-group">
+            <label for="modelUrlInput" class="form-label">Teachable Machine Model URL (Optional)</label>
             <input type="text" id="modelUrlInput" class="text-input" placeholder="https://teachablemachine.withgoogle.com/models/xxxxxxxxx/">
-            <span class="field-hint">Must end with a trailing forward slash.</span>
+            <span class="field-hint">Leave blank to use the bundled local model.</span>
           </div>
           <div class="modal-actions">
-            <button type="button" class="action-btn secondary-btn" id="usePresetModelBtn">Load Preset Demo Model</button>
-            <button type="button" class="action-btn primary-btn" id="saveModelUrlBtn">Load Custom Model</button>
+            <button type="button" class="action-btn secondary-btn" id="usePresetModelBtn">Reset Defaults</button>
+            <button type="button" class="action-btn primary-btn" id="saveModelUrlBtn">Save Configuration</button>
           </div>
         </div>
       </div>
